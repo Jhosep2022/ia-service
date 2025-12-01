@@ -1,0 +1,14 @@
+{
+  "name": "ia-service",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "deploy:dev": "serverless deploy --stage dev",
+    "deploy:qa": "serverless deploy --stage qa",
+    "deploy:main": "serverless deploy --stage main"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0"
+  }
+}

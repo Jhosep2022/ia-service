@@ -1,0 +1,106 @@
+name: Deploy IA buildPlanSpec (code-only)
+
+on:
+  push:
+    branches: [ main, qa ]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Stage (dev|qa|main)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # Elegimos environment según branch o input manual
+    environment: ${{ github.event_name == 'workflow_dispatch'
+        && (inputs.stage != '' && inputs.stage || (github.ref == 'refs/heads/main' && 'dev' || 'qa'))
+        || (github.ref == 'refs/heads/main' && 'dev' || 'qa') }}
+
+    env:
+      AWS_REGION: us-east-1
+      NODE_VERSION: 20
+      SERVICE_DIR: .   # el repo ES ia-service
+
+    steps:
+      - name: 🔄 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔎 Resolve STAGE
+        id: stage
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.stage }}" ]; then
+            STAGE="${{ inputs.stage }}"
+          else
+            # main -> dev, cualquier otra (qa) -> qa
+            STAGE=$([ "${{ github.ref }}" = "refs/heads/main" ] && echo "dev" || echo "qa")
+          fi
+          echo "STAGE=$STAGE" >> "$GITHUB_OUTPUT"
+
+      - name: 🏗️ Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Install deps
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: |
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci --omit=dev
+          else
+            npm i --omit=dev --no-audit --no-fund
+          fi
+
+      - name: 🧷 Package ZIP (code-only)
+        working-directory: ${{ env.SERVICE_DIR }}
+        shell: bash
+        run: |
+          ZIP="ia-service-src.zip"
+          # incluimos src + node_modules + package.json (+ lock si existe)
+          if [ -f package-lock.json ]; then
+            zip -r "$ZIP" src/ node_modules/ package.json package-lock.json
+          else
+            zip -r "$ZIP" src/ node_modules/ package.json
+          fi
+          echo "ZIP_FILE=$ZIP" >> "$GITHUB_ENV"
+
+      - name: 🔐 Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: ⚙️ Update function configuration (env)
+        shell: bash
+        run: |
+          NAME="ia-service-${{ steps.stage.outputs.STAGE }}-buildPlanSpec"
+
+          aws lambda update-function-configuration \
+            --function-name "$NAME" \
+            --environment "Variables={STAGE=${{ steps.stage.outputs.STAGE }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},GEMINI_MODEL_ID=${{ secrets.GEMINI_MODEL_ID }}}"
+
+          aws lambda wait function-updated --function-name "$NAME"
+
+      - name: 🚀 Update function code
+        shell: bash
+        run: |
+          NAME="ia-service-${{ steps.stage.outputs.STAGE }}-buildPlanSpec"
+
+          n=0
+          until aws lambda update-function-code \
+                  --function-name "$NAME" \
+                  --zip-file "fileb://${{ env.ZIP_FILE }}" \
+                  --publish >/dev/null; do
+            n=$((n+1))
+            [ $n -ge 5 ] && exit 1
+            sleep 5
+          done
+
+          aws lambda wait function-updated --function-name "$NAME"
