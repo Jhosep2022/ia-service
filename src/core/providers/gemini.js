@@ -1,6 +1,6 @@
 // src/ai/providers/gemini.js
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { env } from "../../core/env.js";
+import { env } from "../../ai/env.js";
 
 function flattenMessages(messages) {
   const sys = messages.find(m => m.role === "system")?.content || null;
