@@ -24,7 +24,7 @@ export const handler = async (event) => {
     const answer = String(aiRes?.answer || "").trim();
     const updated = aiRes?.updatedLesson || {};
 
-    // Merge defensivo: si la IA omite algo, usamos lo que venía
+    // Merge defensivo: si la IA omite algo, usamos lo que venía arreglso
     const mergedLesson = {
       title: updated.title || lesson.title,
       summary: updated.summary || lesson.summary,
