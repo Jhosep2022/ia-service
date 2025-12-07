@@ -1,4 +1,4 @@
-name: Deploy IA buildPlanSpec (code-only)
+name: Deploy IA buildPlanSpec + lessonChat (code-only)
 
 on:
   push:
@@ -77,30 +77,42 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      - name: ⚙️ Update function configuration (env)
+      # 🔹 Actualizar variables de entorno en ambas Lambdas
+      - name: ⚙️ Update functions configuration (env)
         shell: bash
         run: |
-          NAME="ia-service-${{ steps.stage.outputs.STAGE }}-buildPlanSpec"
+          STAGE="${{ steps.stage.outputs.STAGE }}"
+          for FN in buildPlanSpec lessonChat; do
+            NAME="ia-service-${STAGE}-${FN}"
+            echo "Updating configuration for $NAME ..."
+            aws lambda update-function-configuration \
+              --function-name "$NAME" \
+              --environment "Variables={STAGE=${STAGE},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},GEMINI_MODEL_ID=${{ secrets.GEMINI_MODEL_ID }}}"
 
-          aws lambda update-function-configuration \
-            --function-name "$NAME" \
-            --environment "Variables={STAGE=${{ steps.stage.outputs.STAGE }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},GEMINI_MODEL_ID=${{ secrets.GEMINI_MODEL_ID }}}"
-
-          aws lambda wait function-updated --function-name "$NAME"
-
-      - name: 🚀 Update function code
-        shell: bash
-        run: |
-          NAME="ia-service-${{ steps.stage.outputs.STAGE }}-buildPlanSpec"
-
-          n=0
-          until aws lambda update-function-code \
-                  --function-name "$NAME" \
-                  --zip-file "fileb://${{ env.ZIP_FILE }}" \
-                  --publish >/dev/null; do
-            n=$((n+1))
-            [ $n -ge 5 ] && exit 1
-            sleep 5
+            aws lambda wait function-updated --function-name "$NAME"
           done
 
-          aws lambda wait function-updated --function-name "$NAME"
+      # 🔹 Actualizar código en ambas Lambdas con el mismo ZIP
+      - name: 🚀 Update functions code (buildPlanSpec + lessonChat)
+        shell: bash
+        run: |
+          STAGE="${{ steps.stage.outputs.STAGE }}"
+          ZIP_FILE="${{ env.ZIP_FILE }}"
+
+          for FN in buildPlanSpec lessonChat; do
+            NAME="ia-service-${STAGE}-${FN}"
+            echo "Updating code for $NAME with $ZIP_FILE ..."
+
+            n=0
+            until aws lambda update-function-code \
+                    --function-name "$NAME" \
+                    --zip-file "fileb://${ZIP_FILE}" \
+                    --publish >/dev/null; do
+              n=$((n+1))
+              echo "Retry $n for $NAME ..."
+              [ $n -ge 5 ] && { echo "❌ Failed updating $NAME"; exit 1; }
+              sleep 5
+            done
+
+            aws lambda wait function-updated --function-name "$NAME"
+          done

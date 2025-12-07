@@ -1,5 +1,5 @@
 // src/ai/tasks/lesson-chat.js
-import { parse, ok, err } from "../../core/http.js";
+import { parse, ok, err } from "../../ai/http.js";
 import { refineLessonWithQuestion } from "../providers/gemini.js";
 
 export const handler = async (event) => {
