@@ -34,6 +34,12 @@ async function chatGemini(
   return text;
 }
 
+/**
+ * Devuelve:
+ *  - allowed: true|false
+ *  - spec: { title, prompt, level, tags[] }   (si allowed = true)
+ *  - suggestions: [ { title, prompt, level, tags[] } ]
+ */
 export async function buildCoursePlanSpec({ topic }) {
   const cleanTopic = String(topic || "").trim();
   if (!cleanTopic) throw new Error("TOPIC_REQUIRED");
@@ -98,6 +104,11 @@ No incluyas nada fuera de ese JSON.
   return JSON.parse(text);
 }
 
+/**
+ * Chat tipo tutor de lección:
+ *  - Devuelve answer (markdown corto, personalizado)
+ *  - updatedLesson con contentMD casi siempre igual al original
+ */
 export async function refineLessonWithQuestion({ lesson, question }) {
   const cleanQ = String(question || "").trim();
   if (!cleanQ) throw new Error("QUESTION_REQUIRED");
@@ -113,6 +124,7 @@ export async function refineLessonWithQuestion({ lesson, question }) {
 
   const sys =
     "Eres un tutor experto en PROGRAMACIÓN para una plataforma e-learning. " +
+    "Te comportas como un BOT DE DUDAS personal de la lección. " +
     "Respondes SIEMPRE en español neutro. Devuelves SOLO TEXTO PLANO, nunca JSON.";
 
   const user = `
@@ -135,26 +147,31 @@ El estudiante hace esta pregunta o pide aclaración:
 
 Tu tarea:
 
-1) Responder directamente al estudiante con una explicación clara y personalizada,
+1) Responder directamente al estudiante con una explicación clara y MUY CONCRETA,
    usando ejemplos de código coherentes con la lección (si la lección usa JavaScript, sigue con JavaScript, etc.).
-   Máximo 2–3 párrafos y, si es útil, UN solo bloque de código corto (\`\`\`<lenguaje>\`\`\`).
+   La respuesta debe ser CORTA:
+   - Máximo 2–3 párrafos
+   - Máximo ~10 líneas en total
+   - Opcionalmente UN solo bloque de código corto (\`\`\`<lenguaje>\`\`\`) de 4–8 líneas si el estudiante pide ejemplos.
 
-2) Opcionalmente, proponer una versión ajustada del markdown de la lección SOLO si ayuda realmente.
-   No cambies el tema de la lección, solo mejora redacción o añade una pequeña aclaración.
+2) No reescribas toda la lección. Solo es un chat de dudas.
+   La lección se mantiene casi igual. Solo si ves un error grave puedes sugerir una minúscula mejora.
 
 FORMATO DE SALIDA EXACTO (TEXTO PLANO, SIN JSON):
 
 ===ANSWER_START===
-<respuesta al estudiante en markdown, puede incluir 1 bloque de código>
+<respuesta breve al estudiante en markdown, opcionalmente con 1 bloque de código corto>
 ===ANSWER_END===
 ===UPDATED_LESSON_MD_START===
-<markdown completo de la lección mejorada; si casi no hay cambios, puedes repetir la original>
+<markdown de la lección. En la mayoría de los casos, copia EXACTAMENTE el CONTENT_MD original.
+Solo añade como mucho una nota muy corta al final si es estrictamente necesario.>
 ===UPDATED_LESSON_MD_END===
 
 Reglas:
-- No devuelvas nada fuera de esos bloques.
-- Si crees que no hace falta cambiar la lección, puedes copiar casi igual el CONTENT_MD original.
-- Si la pregunta no tiene que ver con programación, responde en ANSWER avisando eso y devuelve la lección casi igual.
+- En ANSWER no repitas toda la teoría de la lección, solo responde a lo que el estudiante pidió.
+- ANSWER debe ser mucho más corta que toda la lección.
+- En UPDATED_LESSON_MD normalmente copia el CONTENT_MD original sin cambios.
+- No escribas nada fuera de esos bloques.
 `.trim();
 
   const text = await chatGemini(
@@ -162,7 +179,7 @@ Reglas:
       { role: "system", content: sys },
       { role: "user", content: user },
     ],
-    { maxTokens: 1800, mimeType: "text/plain" }
+    { maxTokens: 700, mimeType: "text/plain" }
   );
 
   // Parseamos bloques
@@ -173,9 +190,10 @@ Reglas:
   const mAns = text.match(reAnswer);
   const mUpd = text.match(reUpdated);
 
-  const answer = (mAns?.[1] || text).trim(); // si falla, usamos todo
+  const answer = (mAns?.[1] || text).trim(); // si falla, usamos todo el texto como answer
   const updatedContentMD = (mUpd?.[1] || "").trim();
 
+  // Si la IA no devuelve nada razonable para updated, mantenemos la lección original
   const finalContentMD = updatedContentMD || String(lesson.contentMD || "");
 
   const updatedLesson = {
