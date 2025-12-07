@@ -107,25 +107,23 @@ No incluyas nada fuera de ese JSON.
 /**
  * Chat tipo tutor de lección:
  *  - Devuelve answer (markdown corto, personalizado)
- *  - updatedLesson con contentMD casi siempre igual al original
+ *  - updatedLesson: simplemente la lección original (no la reescribe la IA)
  */
 export async function refineLessonWithQuestion({ lesson, question }) {
   const cleanQ = String(question || "").trim();
   if (!cleanQ) throw new Error("QUESTION_REQUIRED");
 
-  // Recortamos para no mandar bloques gigantes
+  // Recortamos para no mandar bloques gigantes (solo contexto)
   const safeLesson = {
     title: String(lesson?.title || "").slice(0, 160),
     summary: String(lesson?.summary || "").slice(0, 800),
     contentMD: String(lesson?.contentMD || "").slice(0, 8000),
-    tips: Array.isArray(lesson?.tips) ? lesson.tips.slice(0, 8) : [],
-    miniChallenge: lesson?.miniChallenge || "",
   };
 
   const sys =
     "Eres un tutor experto en PROGRAMACIÓN para una plataforma e-learning. " +
     "Te comportas como un BOT DE DUDAS personal de la lección. " +
-    "Respondes SIEMPRE en español neutro. Devuelves SOLO TEXTO PLANO, nunca JSON.";
+    "Respondes SIEMPRE en español neutro. Devuelves SOLO TEXTO PLANO en markdown, nunca JSON.";
 
   const user = `
 Tienes la siguiente LECCIÓN actual (markdown recortado):
@@ -136,9 +134,6 @@ Summary: ${safeLesson.summary}
 
 CONTENT_MD:
 ${safeLesson.contentMD}
-
-Tips actuales: ${JSON.stringify(safeLesson.tips)}
-MiniChallenge actual: ${safeLesson.miniChallenge}
 ---
 
 El estudiante hace esta pregunta o pide aclaración:
@@ -147,31 +142,16 @@ El estudiante hace esta pregunta o pide aclaración:
 
 Tu tarea:
 
-1) Responder directamente al estudiante con una explicación clara y MUY CONCRETA,
-   usando ejemplos de código coherentes con la lección (si la lección usa JavaScript, sigue con JavaScript, etc.).
-   La respuesta debe ser CORTA:
-   - Máximo 2–3 párrafos
-   - Máximo ~10 líneas en total
-   - Opcionalmente UN solo bloque de código corto (\`\`\`<lenguaje>\`\`\`) de 4–8 líneas si el estudiante pide ejemplos.
+- Responde DIRECTAMENTE a la duda del estudiante.
+- La respuesta debe ser CORTA y muy concreta:
+  - Máximo 2–3 párrafos.
+  - Máximo ~10 líneas en total.
+  - Puedes usar UN bloque de código corto (\`\`\`<lenguaje>\`\`\`) de 4–8 líneas si sirve para aclarar.
+- No reescribas la lección completa.
+- No devuelvas plantillas, ni estructuras, ni JSON.
+- Solo responde como si fueras un profesor explicando justo lo que te preguntaron.
 
-2) No reescribas toda la lección. Solo es un chat de dudas.
-   La lección se mantiene casi igual. Solo si ves un error grave puedes sugerir una minúscula mejora.
-
-FORMATO DE SALIDA EXACTO (TEXTO PLANO, SIN JSON):
-
-===ANSWER_START===
-<respuesta breve al estudiante en markdown, opcionalmente con 1 bloque de código corto>
-===ANSWER_END===
-===UPDATED_LESSON_MD_START===
-<markdown de la lección. En la mayoría de los casos, copia EXACTAMENTE el CONTENT_MD original.
-Solo añade como mucho una nota muy corta al final si es estrictamente necesario.>
-===UPDATED_LESSON_MD_END===
-
-Reglas:
-- En ANSWER no repitas toda la teoría de la lección, solo responde a lo que el estudiante pidió.
-- ANSWER debe ser mucho más corta que toda la lección.
-- En UPDATED_LESSON_MD normalmente copia el CONTENT_MD original sin cambios.
-- No escribas nada fuera de esos bloques.
+Recuerda: SOLO la respuesta en markdown, nada más.
 `.trim();
 
   const text = await chatGemini(
@@ -179,27 +159,16 @@ Reglas:
       { role: "system", content: sys },
       { role: "user", content: user },
     ],
-    { maxTokens: 700, mimeType: "text/plain" }
+    { maxTokens: 400, mimeType: "text/plain" }
   );
 
-  // Parseamos bloques
-  const reAnswer = /===ANSWER_START===([\s\S]*?)===ANSWER_END===/;
-  const reUpdated =
-    /===UPDATED_LESSON_MD_START===([\s\S]*?)===UPDATED_LESSON_MD_END===/;
+  const answer = String(text || "").trim();
 
-  const mAns = text.match(reAnswer);
-  const mUpd = text.match(reUpdated);
-
-  const answer = (mAns?.[1] || text).trim(); // si falla, usamos todo el texto como answer
-  const updatedContentMD = (mUpd?.[1] || "").trim();
-
-  // Si la IA no devuelve nada razonable para updated, mantenemos la lección original
-  const finalContentMD = updatedContentMD || String(lesson.contentMD || "");
-
+  // No tocamos la lección: se mantiene igual
   const updatedLesson = {
     title: lesson.title,
     summary: lesson.summary,
-    contentMD: finalContentMD,
+    contentMD: lesson.contentMD,
     tips: Array.isArray(lesson.tips) ? lesson.tips : [],
     miniChallenge: lesson.miniChallenge || null,
   };
