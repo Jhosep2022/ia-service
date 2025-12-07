@@ -3,15 +3,18 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../../ai/env.js";
 
 function flattenMessages(messages) {
-  const sys = messages.find(m => m.role === "system")?.content || null;
+  const sys = messages.find((m) => m.role === "system")?.content || null;
   const user = messages
-    .filter(m => m.role !== "system")
-    .map(m => `${m.role.toUpperCase()}: ${m.content}`)
+    .filter((m) => m.role !== "system")
+    .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
     .join("\n\n");
   return { sys, user };
 }
 
-async function chatGemini(messages, { maxTokens = 400 } = {}) {
+async function chatGemini(
+  messages,
+  { maxTokens = 400, mimeType = "application/json" } = {}
+) {
   if (!env.googleApiKey) throw new Error("Missing GOOGLE_API_KEY");
 
   const genAI = new GoogleGenerativeAI(env.googleApiKey);
@@ -22,7 +25,7 @@ async function chatGemini(messages, { maxTokens = 400 } = {}) {
     ...(sys ? { systemInstruction: sys } : {}),
     generationConfig: {
       maxOutputTokens: maxTokens,
-      responseMimeType: "application/json",
+      responseMimeType: mimeType,
     },
   });
 
@@ -31,12 +34,6 @@ async function chatGemini(messages, { maxTokens = 400 } = {}) {
   return text;
 }
 
-/**
- * Devuelve:
- *  - allowed: true|false
- *  - spec: { title, prompt, level, tags[] }   (si allowed = true)
- *  - suggestions: [ { title, prompt, level, tags[] } ]
- */
 export async function buildCoursePlanSpec({ topic }) {
   const cleanTopic = String(topic || "").trim();
   if (!cleanTopic) throw new Error("TOPIC_REQUIRED");
@@ -88,38 +85,35 @@ Devuelve EXACTAMENTE este JSON:
 }
 
 No incluyas nada fuera de ese JSON.
-`;
+`.trim();
 
   const text = await chatGemini(
     [
       { role: "system", content: sys },
       { role: "user", content: user },
     ],
-    { maxTokens: 550 }
+    { maxTokens: 550, mimeType: "application/json" }
   );
 
   return JSON.parse(text);
 }
 
-
 export async function refineLessonWithQuestion({ lesson, question }) {
   const cleanQ = String(question || "").trim();
   if (!cleanQ) throw new Error("QUESTION_REQUIRED");
 
-  // recortamos para no mandar un súper bloque
+  // Recortamos para no mandar bloques gigantes
   const safeLesson = {
     title: String(lesson?.title || "").slice(0, 160),
     summary: String(lesson?.summary || "").slice(0, 800),
     contentMD: String(lesson?.contentMD || "").slice(0, 8000),
     tips: Array.isArray(lesson?.tips) ? lesson.tips.slice(0, 8) : [],
-    miniChallenge: lesson?.miniChallenge || ""
+    miniChallenge: lesson?.miniChallenge || "",
   };
 
   const sys =
     "Eres un tutor experto en PROGRAMACIÓN para una plataforma e-learning. " +
-    "Tu trabajo es ayudar a estudiantes a entender mejor una lección concreta " +
-    "y proponer una versión mejorada del contenido. Debes responder SIEMPRE en español neutro. " +
-    "Responde ÚNICAMENTE JSON válido.";
+    "Respondes SIEMPRE en español neutro. Devuelves SOLO TEXTO PLANO, nunca JSON.";
 
   const user = `
 Tienes la siguiente LECCIÓN actual (markdown recortado):
@@ -141,41 +135,56 @@ El estudiante hace esta pregunta o pide aclaración:
 
 Tu tarea:
 
-1) Responderle directamente al estudiante con una explicación clara, usando ejemplos de código
-   coherentes con la lección (si la lección usa Java, sigue con Java; si usa Kotlin, sigue con Kotlin, etc.).
-   Máximo 3 párrafos y puedes usar bloques de código markdown.
+1) Responder directamente al estudiante con una explicación clara y personalizada,
+   usando ejemplos de código coherentes con la lección (si la lección usa JavaScript, sigue con JavaScript, etc.).
+   Máximo 2–3 párrafos y, si es útil, UN solo bloque de código corto (\`\`\`<lenguaje>\`\`\`).
 
-2) Proponer una VERSIÓN MEJORADA de la lección, sólo si realmente ayuda:
-   - Mantén la estructura general (introducción, conceptos clave, ejemplo, mini-ejercicio).
-   - Añade explicaciones donde pueda haber confusión.
-   - No cambies el tema de la lección.
+2) Opcionalmente, proponer una versión ajustada del markdown de la lección SOLO si ayuda realmente.
+   No cambies el tema de la lección, solo mejora redacción o añade una pequeña aclaración.
 
-Devuelve EXACTAMENTE este JSON:
+FORMATO DE SALIDA EXACTO (TEXTO PLANO, SIN JSON):
 
-{
-  "answer": "Respuesta al estudiante en español, con o sin código markdown.",
-  "updatedLesson": {
-    "title": "Título (puede ser el mismo o ligeramente mejorado)",
-    "summary": "Resumen en 2–3 oraciones (hasta 300 caracteres).",
-    "contentMD": "Markdown completo de la lección mejorada.",
-    "tips": ["tip 1", "tip 2"],
-    "miniChallenge": "Mini desafío alineado con la explicación."
-  }
-}
+===ANSWER_START===
+<respuesta al estudiante en markdown, puede incluir 1 bloque de código>
+===ANSWER_END===
+===UPDATED_LESSON_MD_START===
+<markdown completo de la lección mejorada; si casi no hay cambios, puedes repetir la original>
+===UPDATED_LESSON_MD_END===
 
 Reglas:
-- Nada fuera de ese JSON.
-- Si la pregunta no tiene que ver con programación o el contenido, de todos modos responde en 'answer'
-  aclarando que solo atiendes dudas de programación y mantén updatedLesson muy similar al original.
-`;
+- No devuelvas nada fuera de esos bloques.
+- Si crees que no hace falta cambiar la lección, puedes copiar casi igual el CONTENT_MD original.
+- Si la pregunta no tiene que ver con programación, responde en ANSWER avisando eso y devuelve la lección casi igual.
+`.trim();
 
   const text = await chatGemini(
     [
       { role: "system", content: sys },
       { role: "user", content: user },
     ],
-    { maxTokens: 2200 }
+    { maxTokens: 1800, mimeType: "text/plain" }
   );
 
-  return JSON.parse(text);
+  // Parseamos bloques
+  const reAnswer = /===ANSWER_START===([\s\S]*?)===ANSWER_END===/;
+  const reUpdated =
+    /===UPDATED_LESSON_MD_START===([\s\S]*?)===UPDATED_LESSON_MD_END===/;
+
+  const mAns = text.match(reAnswer);
+  const mUpd = text.match(reUpdated);
+
+  const answer = (mAns?.[1] || text).trim(); // si falla, usamos todo
+  const updatedContentMD = (mUpd?.[1] || "").trim();
+
+  const finalContentMD = updatedContentMD || String(lesson.contentMD || "");
+
+  const updatedLesson = {
+    title: lesson.title,
+    summary: lesson.summary,
+    contentMD: finalContentMD,
+    tips: Array.isArray(lesson.tips) ? lesson.tips : [],
+    miniChallenge: lesson.miniChallenge || null,
+  };
+
+  return { answer, updatedLesson };
 }
